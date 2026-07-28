@@ -2,6 +2,8 @@
 
 ```python
 from litemapy import Region, BlockState, Schematic
+# skill helpers (add scripts/ to sys.path or run from that dir)
+from helpers import parse_block, draw_floor, draw_walls, draw_fence_ring, replace_blocks_by_id
 ```
 
 ## Creating a schematic
@@ -13,39 +15,66 @@ schem = reg.as_schematic(name="my_build", author="...", description="...")
 schem.save("my_build.litematic")
 ```
 
-- `Region(x, y, z, w, h, l)` — the first three are the minimum corner, **not** the center. The third size argument is called `length` and is the **Z** size.
-- Air is the default everywhere — never place air, just skip those positions.
-- Writing the same position twice: the later write wins.
+- `Region(x, y, z, w, h, l)` — first three are the **minimum corner**, not the center. Third size is **Z**.
+- Air is default — never place air; skip those cells.
+- Later writes to the same cell win.
 
-## Block states with properties
+## Block states
 
 ```python
 BlockState("minecraft:oak_stairs", facing="east", half="bottom", shape="straight")
-BlockState("minecraft:oak_slab", type="top")
-BlockState("minecraft:glass_pane", north="true", south="true")
-BlockState("minecraft:oak_door", facing="south", half="lower", hinge="left")
+parse_block("oak_stairs[facing=east,half=bottom,shape=straight]")  # helpers
 ```
 
-All property values are strings. **litemapy does not validate property names or values** — a typo silently serializes, and Litematica may render the block as missing/default. Double-check against the [Minecraft wiki block-state lists](https://minecraft.wiki) when using non-trivial states. When in doubt, prefer plain full blocks; they're always valid.
+All property values are **strings**. litemapy does **not** validate names/values — typos serialize and break in-game. Prefer plain full blocks when unsure.
 
-## Loading and verifying
+## Loading / editing
 
 ```python
 schem = Schematic.load("file.litematic")
-schem.width, schem.height, schem.length      # declared dims (max over regions)
-schem.regions                                # dict: name -> Region
 reg = list(schem.regions.values())[0]
-reg.count_blocks()                           # non-air block count
-reg.allblockpos()                            # iterator of (x, y, z) positions
-reg.minx(), reg.maxx(), ...                  # occupied bounds per region
-bs = reg[x, y, z]                            # BlockState; bs.id, bs.properties
-schem.name, schem.author, schem.description  # metadata
+reg.count_blocks()
+list(reg.allblockpos())
+reg.minx(), reg.maxx(), reg.miny(), reg.maxy(), reg.minz(), reg.maxz()  # declared volume
+bs = reg[x, y, z]          # BlockState; bs.id
+reg.replace(old_bs, new_bs)  # exact palette match, O(1)
+reg.filter(lambda bs: new_bs if bs.id == "minecraft:stone" else bs)  # by id
+reg.entities               # list[Entity]; mutable (.append)
+reg.tile_entities          # list[TileEntity]; mutable
 ```
+
+Prefer skill CLI for common edits:
+
+```bash
+python edit_litematic.py replace file.litematic FROM TO
+python edit_litematic.py perimeter file.litematic --margin 1 --y 6
+```
+
+## Entities & tile entities
+
+- `Entity.position = (x,y,z)` updates NBT `Pos` (region-**local** coords, same as blocks).
+- Item frames also store `TileX/Y/Z` and often `block_pos` — use `helpers.shift_entity`.
+- `TileEntity.position` reads raw NBT `x/y/z`. With **negative** region size those values are **storage indices** (0-based), not local coords. Use `helpers.tile_entity_local_pos(reg, te)` / `store_to_local` before comparing to blocks.
+- After `rebuild_region` the region is always positive-size 0-based, so TE coords == local == storage.
+- **Surgical block edits** (`replace` only) leave entities/TEs untouched.
+- **perimeter / fill / shift / crop / normalize** rebuild when needed and re-home entities + TEs — use the CLI.
+
+## Expanding a region
+
+Declared volume may not cover a new perimeter. `helpers.ensure_volume(reg, need_min, need_max)` clones into a larger `Region` and copies blocks + entities + TEs when needed. `edit_litematic.py perimeter|fill` call this for you.
+
+## Foreign-file coordinates
+
+Region origins are often **not** `(0,0,0)`. Sizes can be **negative** in metadata; `minx()`/`maxx()` still give inclusive bounds. Always:
+
+1. `inspect_litematic.py` for occupied vs declared bounds
+2. Or `edit_litematic.py normalize --crop` before assuming origin-based math
+
+`render_preview.py` offsets occupied voxels to 0 for display only — it does not rewrite the file.
 
 ## Gotchas
 
-- **Region coordinates are region-absolute.** If a schematic was saved with its min corner at (100, 64, -40), positions from `allblockpos()` live around those coordinates. Offset by the min before assuming 0-based indexing (the bundled `render_preview.py` does this for you).
-- `schem.width/height/length` reflect the declared region size; the *occupied* bounds can be smaller if there are air margins. `inspect_litematic.py` prints both.
-- Non-full blocks (slabs, stairs, panes, doors) are perfectly valid in a `.litematic` — they just aren't in `block_colors.json`, so the preview renderer approximates their color from their base block and notes unknown ids on stdout.
-- Multiple regions per schematic are supported by the format, but one region per file keeps everything simpler (and is what Litematica creates by default).
-- `as_schematic(..., mc_version=...)` defaults to 2975; the default is fine for current Litematica.
+- `schem.width/height/length` = declared region size; occupied can be smaller.
+- Multi-region files work; one region per file is simpler.
+- `as_schematic(..., mc_version=…)` default 2975 is fine for current Litematica; loading preserves the file’s `mc_version`.
+- Replacing a `Region` inside `schem.regions`: `del schem.regions[name]` then `schem.regions[name] = new_reg` (see `helpers.put_region`).

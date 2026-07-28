@@ -1,37 +1,38 @@
 # Design guide for Minecraft builds
 
-Practical knowledge for turning a request into a good-looking `.litematic`. Read this before designing your first build; skim the relevant section on later ones.
+Practical knowledge for turning a request into a good-looking `.litematic`. Read before the first build; skim later.
 
 ## Orientation and coordinates
 
-- **+y is up. The build's front should face +z (south). +x is east (screen-right when looking at the front).**
-- The iso preview shows the +y (top), +z (front) and +x (east) faces — so with this convention, what you see in `*_iso.png` is the build's "hero angle".
-- In the ortho sheet: front view has x increasing to the right and y up; the top view follows map convention (+z downward).
+- **+y is up. Front faces +z (south). +x is east** (screen-right when looking at the front).
+- Iso preview shows +y / +z / +x — the “hero angle”.
+- Ortho: front = x right, y up; top = map style (+z down-screen).
+- Existing dumps may sit at arbitrary origins — inspect or `normalize` before editing by hand.
 
 ## Scale and proportions
 
-- Features need blocks to be readable: a window wants ≥2×2, a face wants ≥8×8, a door is 1×2 (or 2×3 for a double door look).
-- Small builds read as "models", large ones as "structures". A cozy house starts around 9×7 walls; a lighthouse reads well from 20+ tall.
-- Walls 1 block thick are normal. For statues larger than ~16³, make the shell hollow — the interior is invisible and the user saves thousands of blocks.
-- Real-world proportions don't survive contact with voxels. Compress vertically (ceilings 3–4 blocks), exaggerate the features the request is *about* (the stripes of a lighthouse, the ears of a cat statue).
+- Readable features need blocks: window ≥2×2, face ≥8×8, door 1×2 (or 2×3 double look).
+- Cozy house ~9×7 walls; lighthouse reads from 20+ tall.
+- Walls 1 block thick. Statues ≳16³ → hollow shell.
+- Compress real-world proportions (ceilings 3–4); exaggerate the request’s focus features.
 
 ## Palette
 
-- Pick 3–7 colors: a main material, a secondary, an accent, plus roof/foundation. More colors → noise.
-- `references/palette.md` lists all 258 measured block colors grouped by family; `palette_swatch.png` is the same data as a labeled image.
-- Color vibrancy ladder: **concrete > wool > terracotta**. Concrete for saturated accents, wool for soft mid-tones, terracotta for muted/natural tones. They mix well within one build.
-- For natural texture, vary a surface slightly (e.g. stone bricks + cracked stone bricks + andesite), but keep variation within one color family.
+- 3–7 colors: main, secondary, accent, roof/foundation.
+- `palette.md` / `palette_swatch.png`: 258 measured colors.
+- Vibrancy: **concrete > wool > terracotta**. Mix within one family for texture.
+- Material swaps on existing files: `edit_litematic.py replace` (keep stairs/facing with `--keep-properties` when both sides share properties).
 
-## Structure and depth (avoiding the "cardboard" look)
+## Structure and depth
 
-- Roofs should overhang the walls by 1 block. Stairs make convincing sloped roofs.
-- Recess windows and doors 1 block into the wall; frame them with a contrasting material.
-- Give buildings a foundation layer (cobble/stone) that sticks out 1 block.
-- Chimneys, fences, trapdoor shutters and buttons add life for ~zero blocks.
+- Roof overhang 1 block; stairs for slopes (`helpers.draw_simple_roof`).
+- Recess windows/doors 1 block; contrast frames.
+- Foundation layer sticking out 1 block.
+- Fences, trapdoor shutters, buttons add life cheaply (`draw_fence_ring`, `perimeter` CLI).
 
 ## Recipe: head statue from a Minecraft skin
 
-An 8×8×8 hollow head is the classic. Skin PNG layout (64×64, MC 1.8+): each 8×8 face is at a fixed offset —
+8×8×8 hollow head. Skin PNG (64×64, 1.8+): each 8×8 face —
 
 | face | base (x, y) | overlay (x, y) |
 |---|---|---|
@@ -42,17 +43,25 @@ An 8×8×8 hollow head is the classic. Skin PNG layout (64×64, MC 1.8+): each 8
 | left | (16, 8) | (48, 8) |
 | back | (24, 8) | (56, 8) |
 
-- Alpha-composite the overlay ("hat") layer over the base layer before matching colors.
-- Map each face's pixels to the cube's shell; where faces share an edge, later writes win. A pleasing priority order is: bottom < top < back < left < right < front.
-- Front pixels map to z = max, x = u, y = 7 − v (image row 0 is the top of the head).
-- Match colors per-pixel with CIELAB nearest-block, exactly like `voxel_art.py` does — copy its `srgb_to_lab` / palette-loading code into your generator.
-- Skin URLs: `https://api.mojang.com/users/profiles/minecraft/<name>` → profile id → `https://sessionserver.mojang.com/session/minecraft/profile/<id>` → base64 `properties[0].value` → `textures.SKIN.url`. Send a `User-Agent` header; cache the PNG locally so rebuilds work offline.
+- Alpha-composite hat overlay over base before color match.
+- Map faces to the cube shell; edge priority: bottom < top < back < left < right < front.
+- Front → z = max, x = u, y = 7 − v (row 0 = top of head).
+- CIELAB nearest-block like `voxel_art.py` (`srgb_to_lab` / palette load).
+- Skin URL: Mojang profile → session → base64 textures → `SKIN.url`. Send `User-Agent`; cache PNG.
 
-## Common pitfalls (check these in the compare step)
+## Editing existing machines / farms
 
-- **Front facing the wrong way** — the #1 iteration trigger. The front door/face must be on the +z side.
-- **Off-by-one sizes** — an "11 wide" house is x ∈ 0..10. `inspect_litematic.py` shows declared vs occupied bounds; an unintended air margin shrinks the occupied size.
-- **Mirrored art** — in `voxel_art.py`-style vertical art, image row 0 is the *top* (max y); getting this backwards flips the build upside down.
-- **Invalid block states** — stairs with a misspelled `facing=` serialize fine but break in game. Prefer plain blocks unless the shape needs the state.
-- **Glass choices** — `glass` blocks for windows read cleaner than panes at small scales; panes read better at large scales.
-- **Forgetting the floor** — a hollow house with no floor looks broken from the top view.
+- Prefer **CLI replace/perimeter/fill** over rebuilding.
+- After edits, `inspect` entity + tile_entity counts; item frames with custom names are easy to miss visually.
+- Preview colors include hoppers, chests, pistons, observers, etc. — still approximate; ortho + layer ASCII for wiring.
+
+## Common pitfalls
+
+- **Front facing wrong way** — #1 iteration trigger; door/face on +z.
+- **Off-by-one sizes** — “11 wide” ⇒ x ∈ 0..10. Check occupied bounds.
+- **Mirrored pixel art** — image row 0 is top (max y).
+- **Invalid block states** — silent in file, broken in game.
+- **Glass** — full `glass` / stained glass for small windows; panes at large scale.
+- **No floor** — hollow house broken in top view.
+- **Hand-edit without expand** — perimeter outside declared region needs `ensure_volume` (CLI handles it).
+- **Losing TE/entities** — never rebuild a region by only copying blocks if chests/item frames matter.

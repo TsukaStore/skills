@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Text-level verification for a .litematic file.
 
-Prints dimensions, region bounds, non-air block count and a materials table.
-With --layers, also prints one ASCII map per y-level (top view, +z downward)
-so structural details (window holes, floor plans) can be checked numerically.
+Prints dimensions, region bounds, non-air block count, materials table,
+entities / tile-entities summary. Optional per-layer ASCII floor plans.
 
 Usage:
   python inspect_litematic.py build.litematic [--top N] [--layers] [--layer Y]
@@ -15,6 +14,18 @@ from pathlib import Path
 from litemapy import Schematic
 
 SYMBOLS = "#@%*=+abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ0123456789"
+
+
+def _te_local(reg, te):
+    """TileEntity NBT x/y/z are storage indices when region size is negative."""
+    x, y, z = te.position
+    if reg.width < 0:
+        x = x + reg.width + 1
+    if reg.height < 0:
+        y = y + reg.height + 1
+    if reg.length < 0:
+        z = z + reg.length + 1
+    return x, y, z
 
 
 def collect(schem):
@@ -29,6 +40,34 @@ def collect(schem):
     mins = tuple(min(p[i] for p in voxels) for i in range(3))
     maxs = tuple(max(p[i] for p in voxels) for i in range(3))
     return voxels, mins, maxs
+
+
+def _entity_label(ent) -> str:
+    eid = ent.id.split(":", 1)[-1] if ent.id else "?"
+    extra = ""
+    data = ent.data
+    if "Item" in data:
+        item = data["Item"]
+        iid = str(item.get("id", "?"))
+        name = None
+        comps = item.get("components") or item.get("tag")
+        if comps is not None and "minecraft:custom_name" in comps:
+            name = str(comps["minecraft:custom_name"])
+        extra = f" item={iid.split(':',1)[-1]}"
+        if name:
+            extra += f" name={name}"
+    x, y, z = ent.position
+    return f"{eid} @ ({x:.1f},{y:.1f},{z:.1f}){extra}"
+
+
+def _te_label(te, block_at, pos=None) -> str:
+    x, y, z = pos if pos is not None else te.position
+    bid = block_at.get((x, y, z), "?")
+    tid = None
+    if "id" in te.data:
+        tid = str(te.data["id"]).split(":", 1)[-1]
+    label = tid or bid
+    return f"{label} @ ({x},{y},{z})"
 
 
 def main():
@@ -51,6 +90,11 @@ def main():
         if val:
             print(f"{attr}: {val}")
     print(f"regions: {len(schem.regions)}")
+    for rname, reg in schem.regions.items():
+        print(f"  region {rname!r}: declared "
+              f"({reg.minx()},{reg.miny()},{reg.minz()}).."
+              f"({reg.maxx()},{reg.maxy()},{reg.maxz()})  "
+              f"{abs(reg.width)}x{abs(reg.height)}x{abs(reg.length)}")
     print(f"schematic size: {schem.width} x {schem.height} x {schem.length}  (W x H x L, declared)")
     print(f"occupied bounds: {mins} .. {maxs}  ({W} x {H} x {L})")
     print(f"non-air blocks: {len(voxels)}")
@@ -59,6 +103,30 @@ def main():
     print(f"\nmaterials (top {args.top} of {len(counts)}):")
     for bid, n in counts.most_common(args.top):
         print(f"  {bid:<36} x{n}")
+
+    # entities / tile entities
+    n_ent = sum(len(r.entities) for r in schem.regions.values())
+    n_te = sum(len(r.tile_entities) for r in schem.regions.values())
+    print(f"\nentities: {n_ent}")
+    for reg in schem.regions.values():
+        for ent in reg.entities:
+            print(f"  - {_entity_label(ent)}")
+    print(f"tile_entities: {n_te}")
+    if n_te:
+        te_kinds = Counter()
+        for reg in schem.regions.values():
+            for te in reg.tile_entities:
+                x, y, z = _te_local(reg, te)
+                bid = voxels.get((x, y, z), "?")
+                if "id" in te.data:
+                    bid = str(te.data["id"]).split(":", 1)[-1]
+                te_kinds[bid] += 1
+        for k, n in te_kinds.most_common(20):
+            print(f"  {k:<36} x{n}")
+        if n_te <= 12:
+            for reg in schem.regions.values():
+                for te in reg.tile_entities:
+                    print(f"  - {_te_label(te, voxels, _te_local(reg, te))}")
 
     layers = None
     if args.layer is not None:
